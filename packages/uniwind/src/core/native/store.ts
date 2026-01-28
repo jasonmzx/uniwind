@@ -10,7 +10,10 @@ import { UniwindRuntime } from './runtime'
 type StylesResult = {
     styles: RNStyle
     dependencies: Array<StyleDependency>
+    dependencySum: number
 }
+
+const emptyState: StylesResult = { styles: {}, dependencies: [], dependencySum: 0 }
 
 class UniwindStoreBuilder {
     runtime = UniwindRuntime
@@ -20,12 +23,9 @@ class UniwindStoreBuilder {
     private cache = new Map<string, StylesResult>()
     private generateStyleSheetCallbackResult: ReturnType<GenerateStyleSheetsCallback> | null = null
 
-    getStyles(className?: string, state?: ComponentState): StylesResult {
+    getStyles(className: string | undefined, componentProps?: Record<string, any>, state?: ComponentState): StylesResult {
         if (className === undefined || className === '') {
-            return {
-                styles: {},
-                dependencies: [],
-            }
+            return emptyState
         }
 
         const cacheKey = `${className}${state?.isDisabled ?? false}${state?.isFocused ?? false}${state?.isPressed ?? false}`
@@ -34,14 +34,17 @@ class UniwindStoreBuilder {
             return this.cache.get(cacheKey)!
         }
 
-        const result = this.resolveStyles(className, state)
+        const result = this.resolveStyles(className, componentProps, state)
 
-        this.cache.set(cacheKey, result)
-        UniwindListener.subscribe(
-            () => this.cache.delete(cacheKey),
-            result.dependencies,
-            { once: true },
-        )
+        // Don't cache styles that depend on data attributes
+        if (!result.hasDataAttributes) {
+            this.cache.set(cacheKey, result)
+            UniwindListener.subscribe(
+                () => this.cache.delete(cacheKey),
+                result.dependencies,
+                { once: true },
+            )
+        }
 
         return result
     }
@@ -80,10 +83,12 @@ class UniwindStoreBuilder {
         }
     }
 
-    private resolveStyles(classNames: string, state?: ComponentState) {
+    private resolveStyles(classNames: string, componentProps?: Record<string, any>, state?: ComponentState) {
         const result = {} as Record<string, any>
         let vars = this.vars
+        let hasDataAttributes = false
         const dependencies = new Set<StyleDependency>()
+        let dependencySum = 0
         const bestBreakpoints = new Map<string, Style>()
 
         for (const className of classNames.split(' ')) {
@@ -93,7 +98,14 @@ class UniwindStoreBuilder {
 
             for (const style of this.stylesheet[className] as Array<Style>) {
                 if (style.dependencies) {
-                    style.dependencies.forEach(dep => dependencies.add(dep))
+                    style.dependencies.forEach(dep => {
+                        dependencies.add(dep)
+                        dependencySum |= 1 << dep
+                    })
+                }
+
+                if (style.dataAttributes !== null) {
+                    hasDataAttributes = true
                 }
 
                 if (
@@ -105,6 +117,7 @@ class UniwindStoreBuilder {
                     || (style.active !== null && state?.isPressed !== style.active)
                     || (style.focus !== null && state?.isFocused !== style.focus)
                     || (style.disabled !== null && state?.isDisabled !== style.disabled)
+                    || (style.dataAttributes !== null && !this.validateDataAttributes(style.dataAttributes, componentProps))
                 ) {
                     continue
                 }
@@ -216,7 +229,37 @@ class UniwindStoreBuilder {
         return {
             styles: { ...result } as RNStyle,
             dependencies: Array.from(dependencies),
+            dependencySum,
+            hasDataAttributes,
         }
+    }
+
+    private validateDataAttributes(dataAttributes: Record<string, string>, props: Record<string, any> = {}) {
+        for (const [attribute, expectedAttributeValue] of Object.entries(dataAttributes)) {
+            const attributeValue = props[attribute]
+
+            if (expectedAttributeValue === 'true') {
+                if (attributeValue !== true && attributeValue !== 'true') {
+                    return false
+                }
+
+                continue
+            }
+
+            if (expectedAttributeValue === 'false') {
+                if (attributeValue !== false && attributeValue !== 'false') {
+                    return false
+                }
+
+                continue
+            }
+
+            if (attributeValue !== expectedAttributeValue) {
+                return false
+            }
+        }
+
+        return true
     }
 }
 
