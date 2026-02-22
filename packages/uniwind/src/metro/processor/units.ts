@@ -17,9 +17,9 @@ export class Units {
                 case 'px':
                     return this.replaceInfinity(length.value)
                 case 'vw':
-                    return `rt.screen.width * ${length.value / 100}`
+                    return `(rt.screen?.width || 0) * ${length.value / 100}`
                 case 'vh':
-                    return `rt.screen.height * ${length.value / 100}`
+                    return `(rt.screen?.height || 0) * ${length.value / 100}`
                 case 'rem':
                     return length.value * this.Processor.vars['--uniwind-em']
                 case 'em':
